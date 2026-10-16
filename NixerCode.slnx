@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NixerCode.Cli/NixerCode.Cli.csproj" />
+    <Project Path="src/NixerCode.Core/NixerCode.Core.csproj" />
+  </Folder>
+</Solution>

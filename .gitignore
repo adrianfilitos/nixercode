@@ -1,0 +1,11 @@
+# Compilacion
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Salidas locales
+out/
+artifacts/
+*.xip
