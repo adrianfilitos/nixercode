@@ -2,6 +2,7 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using NixerCode.Core;
+using NixerCode.Core.Bundling;
 using NixerCode.Core.Xip;
 
 const string Usage = """
@@ -21,6 +22,9 @@ USO
   nixer xip extract <archivo.xip> <destino> [filtro...]
                                               Extrae a disco las entradas que coincidan
   nixer fs  symlinks <manifiesto> [raiz]      Crea enlaces simbolicos desde un manifiesto
+  nixer ios bundle <salida.app> <ejecutable> <bundle-id> [nombre] [version] [build] [minOS]
+                                              Construye el paquete .app de iOS
+  nixer ios ipa    <app.app> [salida.ipa]     Empaqueta la app para instalar
 """;
 
 if (args.Length < 1)
@@ -45,6 +49,23 @@ try
         return args[1].ToLowerInvariant() switch
         {
             "symlinks" => FsSymlinks(args[2], args.Length > 3 ? args[3] : "."),
+            _ => Unknown(args[1]),
+        };
+    }
+
+    if (command == "ios")
+    {
+        if (args.Length < 3)
+        {
+            Console.WriteLine(Usage);
+            return 1;
+        }
+
+        return args[1].ToLowerInvariant() switch
+        {
+            "bundle" => IosBundle(args.Skip(2).ToArray()),
+            "ipa" when args.Length > 2 => IosIpa(args[2], args.Length > 3 ? args[3] : null),
+            "ipa" => Unknown("ipa (falta la app)"),
             _ => Unknown(args[1]),
         };
     }
@@ -891,4 +912,106 @@ static int XipCat(string path, string fragment, int bytes)
 
     Console.WriteLine($"  (no encontrado; se recorrieron {walked:N0} entradas)");
     return 3;
+}
+
+static int IosBundle(string[] a)
+{
+    if (a.Length < 3)
+    {
+        Console.Error.WriteLine("ERROR: faltan argumentos.");
+        Console.Error.WriteLine("  nixer ios bundle <salida.app> <ejecutable> <bundle-id> [nombre] [version] [build] [minOS]");
+        return 1;
+    }
+
+    string destination = a[0];
+    string executable = a[1];
+    string bundleIdentifier = a[2];
+    string? name = a.Length > 3 ? a[3] : null;
+    string version = a.Length > 4 ? a[4] : "1.0";
+    string build = a.Length > 5 ? a[5] : "1";
+    string minimumOs = a.Length > 6 ? a[6] : "17.0";
+
+    Console.WriteLine();
+
+    try
+    {
+        AppBundleReport report = AppBundleBuilder.Build(new AppBundleRequest
+        {
+            Destination = destination,
+            ExecutablePath = executable,
+            BundleIdentifier = bundleIdentifier,
+            DisplayName = name,
+            Version = version,
+            Build = build,
+            MinimumOSVersion = minimumOs,
+        });
+
+        Console.WriteLine($"  Paquete     : {report.Path}");
+        Console.WriteLine($"  Ejecutable  : {report.ExecutableName} ({ByteSize.Format(report.ExecutableSize)})");
+        Console.WriteLine($"  Identificador: {bundleIdentifier}");
+        Console.WriteLine($"  Version     : {version} (build {build})   iOS minimo {minimumOs}");
+        Console.WriteLine();
+        Console.WriteLine("  Contenido:");
+        foreach (string file in report.Files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            string relative = Path.GetRelativePath(report.Path, file);
+            Console.WriteLine($"      {relative,-24} {ByteSize.Format(new FileInfo(file).Length)}");
+        }
+
+        Console.WriteLine();
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"ERROR: {ex.Message}");
+        return 2;
+    }
+}
+
+static int IosIpa(string appPath, string? output)
+{
+    string app = Path.GetFullPath(appPath);
+    if (!Directory.Exists(app))
+    {
+        Console.Error.WriteLine($"ERROR: no existe la carpeta '{app}'.");
+        return 1;
+    }
+
+    if (!app.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("ERROR: se espera una carpeta .app.");
+        return 1;
+    }
+
+    string safeName = Path.GetFileName(app);
+    if (safeName.Contains(' ') || !safeName.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_'))
+    {
+        Console.Error.WriteLine("AVISO: el nombre de la app tiene caracteres poco recomendables; iOS prefiere letras, numeros, punto, guion y guion bajo.");
+    }
+
+    output = Path.GetFullPath(output ?? Path.ChangeExtension(app, ".ipa"));
+    if (File.Exists(output))
+    {
+        File.Delete(output);
+    }
+
+    string[] files = Directory.GetFiles(app, "*", SearchOption.AllDirectories);
+    using (var zip = System.IO.Compression.ZipFile.Open(output, System.IO.Compression.ZipArchiveMode.Create))
+    {
+        foreach (string file in files)
+        {
+            string relative = Path.GetRelativePath(app, file).Replace('\\', '/');
+            var entry = zip.CreateEntry($"Payload/{safeName}/{relative}", System.IO.Compression.CompressionLevel.Optimal);
+            using Stream source = File.OpenRead(file);
+            using Stream target = entry.Open();
+            source.CopyTo(target);
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"  Paquete : {output}");
+    Console.WriteLine($"  Tamano  : {ByteSize.Format(new FileInfo(output).Length)}");
+    Console.WriteLine($"  Contenido: Payload/{safeName}/  ({files.Length} archivos)");
+    Console.WriteLine();
+    return 0;
 }
